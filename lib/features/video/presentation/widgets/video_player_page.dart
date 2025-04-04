@@ -42,9 +42,6 @@ class _VideoPlayerPageState extends State<VideoPlayerPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(widget.video.title),
-      ),
       body: Center(
         child: _isInitialized
             ? AspectRatio(

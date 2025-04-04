@@ -211,17 +211,7 @@ class _VideoListState extends State<VideoList> {
                                 );
                               },
                             ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Text(
-                        video.title,
-                        style: const TextStyle(
-                          fontSize: 14,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
+                    )
                   ],
                 ),
               ),

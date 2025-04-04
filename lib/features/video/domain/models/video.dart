@@ -1,37 +1,41 @@
 import 'package:equatable/equatable.dart';
 
-class Video extends Equatable {
+class Video {
+  final String id;
   final String path;
-  final String title;
-  final DateTime dateAdded;
   final String? thumbnailPath;
+  final Duration duration;
+  final DateTime dateAdded;
+  final int size;
   final bool isThumbnailGenerated;
 
-  const Video({
+  Video({
+    required this.id,
     required this.path,
-    required this.title,
-    required this.dateAdded,
     this.thumbnailPath,
+    required this.duration,
+    required this.dateAdded,
+    required this.size,
     this.isThumbnailGenerated = false,
   });
 
   Video copyWith({
+    String? id,
     String? path,
-    String? title,
-    DateTime? dateAdded,
     String? thumbnailPath,
+    Duration? duration,
+    DateTime? dateAdded,
+    int? size,
     bool? isThumbnailGenerated,
   }) {
     return Video(
+      id: id ?? this.id,
       path: path ?? this.path,
-      title: title ?? this.title,
-      dateAdded: dateAdded ?? this.dateAdded,
       thumbnailPath: thumbnailPath ?? this.thumbnailPath,
+      duration: duration ?? this.duration,
+      dateAdded: dateAdded ?? this.dateAdded,
+      size: size ?? this.size,
       isThumbnailGenerated: isThumbnailGenerated ?? this.isThumbnailGenerated,
     );
   }
-
-  @override
-  List<Object?> get props =>
-      [path, title, dateAdded, thumbnailPath, isThumbnailGenerated];
 }
