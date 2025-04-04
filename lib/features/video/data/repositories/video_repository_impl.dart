@@ -23,49 +23,56 @@ class VideoRepositoryImpl extends ChangeNotifier implements VideoRepository {
     '.flv'
   ];
   bool _isInitialized = false;
-  late final Directory _thumbnailCacheDir;
+  Directory? _thumbnailCacheDir;
   final Map<String, bool> _processingThumbnails = {};
+  static const platform = MethodChannel('com.example.albumtube/platform');
 
   @override
   Future<void> initialize() async {
     if (_isInitialized) return;
 
     if (Platform.isAndroid) {
-      final permissions = <Permission>[
+      final permissions = [
         Permission.storage,
         Permission.accessMediaLocation,
       ];
 
+      // Android 13 이상인 경우 READ_MEDIA_VIDEO 권한 추가
+      if (await _getAndroidSdkVersion() >= 33) {
+        permissions.add(Permission.videos);
+      }
+
       for (final permission in permissions) {
-        final status = await permission.status;
-        if (status.isDenied) {
-          final result = await permission.request();
-          if (!result.isGranted) {
-            print('Permission denied: $permission');
-            throw Exception('All permissions are required to access videos');
-          }
+        final status = await permission.request();
+        if (!status.isGranted) {
+          throw Exception('Permission denied: $permission');
         }
       }
-    } else {
-      final storageStatus = await Permission.storage.request();
-      final photosStatus = await Permission.photos.request();
 
-      if (!storageStatus.isGranted || !photosStatus.isGranted) {
-        throw Exception(
-            'Storage and media permissions are required to access videos');
+      // Android에서는 외부 저장소의 앱별 디렉토리를 사용
+      final externalDir = await getExternalStorageDirectory();
+      if (externalDir == null) {
+        throw Exception('Failed to get external storage directory');
       }
-    }
-
-    if (Platform.isAndroid) {
-      _thumbnailCacheDir = Directory(
-          '/storage/emulated/0/Android/data/com.example.localtube/thumbnails');
+      _thumbnailCacheDir = Directory(path.join(externalDir.path, 'thumbnails'));
     } else {
+      // iOS나 다른 플랫폼에서는 앱의 문서 디렉토리 사용
       final appDir = await getApplicationDocumentsDirectory();
-      _thumbnailCacheDir = Directory('${appDir.path}/thumbnails');
+      _thumbnailCacheDir = Directory(path.join(appDir.path, 'thumbnails'));
     }
 
-    if (!await _thumbnailCacheDir.exists()) {
-      await _thumbnailCacheDir.create(recursive: true);
+    try {
+      if (!await _thumbnailCacheDir!.exists()) {
+        await _thumbnailCacheDir!.create(recursive: true);
+      }
+    } catch (e) {
+      debugPrint('Error creating thumbnail directory: $e');
+      // 폴더 생성 실패 시 캐시 디렉토리 사용
+      final cacheDir = await getTemporaryDirectory();
+      _thumbnailCacheDir = Directory(path.join(cacheDir.path, 'thumbnails'));
+      if (!await _thumbnailCacheDir!.exists()) {
+        await _thumbnailCacheDir!.create(recursive: true);
+      }
     }
 
     await _loadLocalVideos();
@@ -74,11 +81,11 @@ class VideoRepositoryImpl extends ChangeNotifier implements VideoRepository {
 
   Future<int> _getAndroidSdkVersion() async {
     try {
-      const platform = MethodChannel('com.example.localtube/platform');
-      final sdkInt = await platform.invokeMethod<int>('getAndroidSdkVersion');
-      return sdkInt ?? 0;
+      final sdkVersion =
+          await platform.invokeMethod<int>('getAndroidSdkVersion');
+      return sdkVersion ?? 0;
     } catch (e) {
-      print('Error getting Android SDK version: $e');
+      debugPrint('Error getting Android SDK version: $e');
       return 0;
     }
   }
@@ -99,51 +106,49 @@ class VideoRepositoryImpl extends ChangeNotifier implements VideoRepository {
   }
 
   Future<void> _loadLocalVideos() async {
-    // initialize()에서 이미 권한을 확인했으므로 여기서는 생략
-    final directories = <Directory>[];
-
+    final List<Video> videos = [];
     if (Platform.isIOS || Platform.isMacOS) {
-      final documentsDir = await getApplicationDocumentsDirectory();
-      directories.add(Directory(documentsDir.path));
+      final appDir = await getApplicationDocumentsDirectory();
+      await _scanDirectory(appDir, videos);
     } else if (Platform.isAndroid) {
-      directories.add(Directory('/storage/emulated/0/Download'));
-      directories.add(Directory('/storage/emulated/0/DCIM'));
-      directories.add(Directory('/storage/emulated/0/Movies'));
-    }
+      // Android에서는 여러 미디어 디렉토리를 검색
+      final directories = [
+        Directory('/storage/emulated/0/DCIM'),
+        Directory('/storage/emulated/0/Movies'),
+        Directory('/storage/emulated/0/Download'),
+      ];
 
-    final videos = <Video>[];
-    for (final directory in directories) {
-      if (await directory.exists()) {
-        await _scanDirectory(directory, videos);
+      for (final dir in directories) {
+        if (await dir.exists()) {
+          await _scanDirectory(dir, videos);
+        }
       }
     }
-
     _videos = videos;
     notifyListeners();
   }
 
   Future<void> _scanDirectory(Directory directory, List<Video> videos) async {
     try {
-      await for (final entity in directory.list(recursive: true)) {
-        if (entity is File) {
-          final extension =
-              entity.path.toLowerCase().substring(entity.path.lastIndexOf('.'));
-          if (_videoExtensions.contains(extension)) {
-            final dateAdded = entity.lastModifiedSync();
-            final title = path.basename(entity.path);
-
-            videos.add(
-              Video(
-                path: entity.path,
-                title: title,
-                dateAdded: dateAdded,
-              ),
-            );
+      final entities = await directory.list(recursive: true).toList();
+      for (final entity in entities) {
+        if (entity is File &&
+            _videoExtensions
+                .any((ext) => entity.path.toLowerCase().endsWith(ext))) {
+          try {
+            final stat = await entity.stat();
+            videos.add(Video(
+              path: entity.path,
+              title: path.basename(entity.path),
+              dateAdded: stat.modified,
+            ));
+          } catch (e) {
+            debugPrint('Error getting file stats: $e');
           }
         }
       }
     } catch (e) {
-      print('Error scanning directory: ${directory.path}, Error: $e');
+      debugPrint('Error scanning directory ${directory.path}: $e');
     }
   }
 
@@ -170,7 +175,7 @@ class VideoRepositoryImpl extends ChangeNotifier implements VideoRepository {
 
       final videoFileName = video.path.split('/').last;
       final thumbnailFileName = '${videoFileName.hashCode}.jpg';
-      final thumbnailPath = '${_thumbnailCacheDir.path}/$thumbnailFileName';
+      final thumbnailPath = '${_thumbnailCacheDir!.path}/$thumbnailFileName';
 
       final thumbnailFile = File(thumbnailPath);
       if (await thumbnailFile.exists()) {
@@ -320,7 +325,7 @@ class VideoRepositoryImpl extends ChangeNotifier implements VideoRepository {
       final thumbnailFileName =
           '${path.basenameWithoutExtension(videoFileName)}_thumb.jpg';
       final thumbnailPath =
-          path.join(_thumbnailCacheDir.path, thumbnailFileName);
+          path.join(_thumbnailCacheDir!.path, thumbnailFileName);
 
       return thumbnailPath;
     } catch (e) {
